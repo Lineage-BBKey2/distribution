@@ -1,0 +1,13 @@
+{
+  "response": [
+    {
+      "datetime": 1789455439,
+      "filename": "lineage-22.2-20260915-UNOFFICIAL-zkrab-v1.20c-athena.zip",
+      "id": "7340e1b1f9ac03ae35f2e702dc8a97a01da53df5017d2c06997a9128f77f6210",
+      "romtype": "unofficial",
+      "size": 1073179793,
+      "url": "https://github.com/Lineage-BBKey2/distribution/releases/download/v1.20c/lineage-22.2-20260915-UNOFFICIAL-zkrab-v1.20c-athena.zip",
+      "version": "22.2"
+    }
+  ]
+}
