@@ -1,12 +1,12 @@
 {
   "response": [
     {
-      "datetime": 1787867772,
-      "filename": "lineage-22.2-20260827-UNOFFICIAL-zkrab-v1.11a-athena.zip",
-      "id": "04de3b2bc5e185b5d15c9fa008c14eeeb85acd5c6501c6e0a9dddd4f992d5f04",
+      "datetime": 1789496134,
+      "filename": "lineage-22.2-20260915-UNOFFICIAL-zkrab-v1.12a-athena.zip",
+      "id": "0538ae45897eb29759ae56a41ba03dbb97a72bf309711ea11d50451a91f37a48",
       "romtype": "unofficial",
-      "size": 1057354068,
-      "url": "https://github.com/Lineage-BBKey2/distribution/releases/download/v1.11a/lineage-22.2-20260827-UNOFFICIAL-zkrab-v1.11a-athena.zip",
+      "size": 1057694764,
+      "url": "https://github.com/Lineage-BBKey2/distribution/releases/download/v1.12a/lineage-22.2-20260915-UNOFFICIAL-zkrab-v1.12a-athena.zip",
       "version": "22.2"
     }
   ]
