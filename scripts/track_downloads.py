@@ -60,11 +60,16 @@ def get_all(repository, endpoint):
     return [item for page in json.loads(result) for item in page]
 
 
-def collect(repository, history):
+def collect(repository, history, release_metadata=None):
     # Complete every API request before changing any saved files.
     assets = []
     for release in get_all(repository, "releases"):
         if not release["draft"]:
+            if release_metadata is not None:
+                release_metadata[release["tag_name"]] = {
+                    "published_at": release["published_at"],
+                    "id": release["id"],
+                }
             for asset in get_all(repository, f"releases/{release['id']}/assets"):
                 assets.append((release["tag_name"], asset))
     if not assets:
@@ -107,7 +112,22 @@ def category(name):
     return "Other attachments"
 
 
-def render(history, directory):
+def select_recent_tags(history, release_metadata):
+    first_seen = {}
+    for row in history:
+        if category(row["asset"]) == "Other attachments":
+            continue
+        timestamp = parse_time(row["observed_at"])
+        first_seen[row["tag"]] = min(timestamp, first_seen.get(row["tag"], timestamp))
+
+    def rank(tag):
+        published = release_metadata.get(tag, {}).get("published_at")
+        return (bool(published), parse_time(published) if published else first_seen[tag], tag)
+
+    return set(sorted(first_seen, key=rank, reverse=True)[:3])
+
+
+def render(history, directory, release_metadata=None):
     directory.mkdir(parents=True, exist_ok=True)
     # Keep these assets in the CSV, but omit them from both charts.
     history = [row for row in history
@@ -122,100 +142,98 @@ def render(history, directory):
     if any(category(rows[-1]["asset"]) == "Other attachments" for rows in groups.values()):
         panels.append("Other attachments")
 
-    # Stable tags/colors; include all recorded assets, including deleted ones.
     tags = sorted({row["tag"] for row in history})
-    colors = {tag: plt.get_cmap("tab20")(i % 20) for i, tag in enumerate(tags)}
+    recent_tags = select_recent_tags(history, release_metadata or {})
     latest = max((parse_time(row["observed_at"]) for row in history), default=None)
     earliest = min((parse_time(row["observed_at"]) for row in history), default=None)
-    plt.rcParams.update({
-        "font.family": "DejaVu Sans", "font.size": 10,
-        "svg.hashsalt": "rom-download-statistics",
-    })
-
-    # Include the latest observed UTC date and its preceding 29 dates.
-    # The rolling window changes the displayed range, never the saved CSV.
-    recent_start = None
-    recent_end = None
+    recent_start = recent_end = None
     if latest is not None:
-        latest_midnight = latest.replace(hour=0, minute=0, second=0, microsecond=0)
-        first_midnight = earliest.replace(hour=0, minute=0, second=0, microsecond=0)
-        recent_start = max(first_midnight, latest_midnight - timedelta(days=29))
-        recent_end = latest_midnight + timedelta(days=1)
+        midnight = latest.replace(hour=0, minute=0, second=0, microsecond=0)
+        first = earliest.replace(hour=0, minute=0, second=0, microsecond=0)
+        recent_start = max(first, midnight - timedelta(days=29))
+        recent_end = midnight + timedelta(days=1)
 
-    for mode in ("total", "30days"):
-        fig, axes = plt.subplots(len(panels), 1, figsize=(12, 4.5 * len(panels)))
-        title = ("Cumulative ROM downloads — full history" if mode == "total"
-                 else "Cumulative ROM downloads — latest 30 days")
-        fig.suptitle(title, fontsize=18, fontweight="bold", y=0.99)
+    themes = {
+        "light": {"background": "#ffffff", "text": "#1f2328", "grid": "#d0d7de",
+                  "muted": "#59636e", "palette": ["#0969da", "#bc4c00", "#1a7f37", "#8250df", "#cf222e", "#0550ae", "#953800", "#0a3069", "#6639ba", "#116329"]},
+        "dark": {"background": "#0d1117", "text": "#e6edf3", "grid": "#30363d",
+                 "muted": "#9198a1", "palette": ["#58a6ff", "#ffa657", "#7ee787", "#d2a8ff", "#ff7b72", "#79c0ff", "#ffc680", "#a5d6ff", "#e2c5ff", "#aff5b4"]},
+    }
+    for mode in ("30days", "total"):
+        visible_groups = []
+        for rows in groups.values():
+            if mode == "30days" and rows[-1]["tag"] not in recent_tags:
+                continue
+            visible = rows if mode == "total" else [
+                row for row in rows
+                if recent_start <= parse_time(row["observed_at"]) < recent_end
+            ]
+            if visible:
+                visible_groups.append(visible)
+        shown_panels = [panel for panel in panels
+                        if panel != "Other attachments" or any(
+                            category(rows[-1]["asset"]) == panel for rows in visible_groups)]
 
-        for ax, panel in zip(axes, panels):
-            selected = []
-            for rows in groups.values():
-                if category(rows[-1]["asset"]) != panel:
-                    continue
-                visible = rows if mode == "total" else [
-                    row for row in rows
-                    if recent_start <= parse_time(row["observed_at"]) < recent_end
-                ]
-                if visible:
-                    selected.append(visible)
-            duplicates = Counter(rows[-1]["tag"] for rows in selected)
-            plotted = 0
-            for rows in sorted(selected, key=lambda rows: rows[-1]["tag"]):
-                tag = rows[-1]["tag"]
-                label = tag
-                if duplicates[tag] > 1:
-                    label += f" / asset {rows[-1]['asset_id']}"
-                xs, ys = [], []
-                for row in rows:
-                    observed = parse_time(row["observed_at"])
-                    xs.append(observed)
-                    ys.append(int(row["total"]))
-                if xs:
-                    ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.6,
-                            color=colors[tag], label=label)
-                    plotted += 1
-
-            ax.set_title(panel, loc="left", fontweight="bold")
-            ax.set_ylabel("Cumulative downloads")
-            ax.set_xlabel("Observation time (UTC)")
-            ax.set_ylim(bottom=0)
-            ax.grid(axis="y", alpha=0.22)
-            ax.spines[["top", "right"]].set_visible(False)
-            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-            locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
-            ax.xaxis.set_major_locator(locator)
-            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator, tz=timezone.utc))
-            if earliest is not None:
-                if mode == "total":
-                    padding = max((latest - earliest) / 30, timedelta(hours=1))
-                    ax.set_xlim(earliest - padding, latest + padding)
-                else:
-                    ax.set_xlim(recent_start, recent_end)
-            else:
-                ax.set_xticks([])
-                ax.xaxis.set_major_formatter(NullFormatter())
-            if plotted:
-                ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
-            else:
-                message = ("No matching observations in this window" if mode == "30days"
-                           else "No matching assets observed yet")
-                ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center")
-
-        note = "File downloads, not unique users or installations. No history is inferred before collection began."
-        if mode == "30days":
-            note = "Latest 30 UTC calendar dates; values remain lifetime totals. Complete history is retained in the CSV."
-        updated = latest.strftime("%Y-%m-%d %H:%M UTC") if latest else "No observations yet"
-        fig.text(0.01, 0.012, f"{note}\nLast observation: {updated}", fontsize=9, color="#555555")
-        fig.tight_layout(rect=(0, 0.055, 1, 0.965))
-        destination = directory / f"downloads-{mode}.svg"
-        # No changing SVG generation timestamp, and write atomically.
-        content = io.StringIO()
-        fig.savefig(content, format="svg", metadata={"Date": None}, facecolor="white")
-        temporary = destination.with_suffix(".svg.tmp")
-        temporary.write_text(content.getvalue(), encoding="utf-8")
-        temporary.replace(destination)
-        plt.close(fig)
+        for theme_name, theme in themes.items():
+            settings = {
+                "font.family": "DejaVu Sans", "font.size": 10,
+                "svg.hashsalt": "rom-download-statistics",
+                "figure.facecolor": theme["background"], "axes.facecolor": theme["background"],
+                "text.color": theme["text"], "axes.labelcolor": theme["text"],
+                "axes.edgecolor": theme["muted"], "xtick.color": theme["text"],
+                "ytick.color": theme["text"], "grid.color": theme["grid"],
+            }
+            with plt.rc_context(settings):
+                colors = {tag: theme["palette"][i % len(theme["palette"])]
+                          for i, tag in enumerate(tags)}
+                fig, axes = plt.subplots(len(shown_panels), 1, figsize=(12, 4.5 * len(shown_panels)))
+                title = ("Cumulative ROM downloads — full history" if mode == "total"
+                         else "Cumulative ROM downloads — latest 30 days / newest 3 releases")
+                fig.suptitle(title, fontsize=16, fontweight="bold", y=0.99)
+                for ax, panel in zip(axes, shown_panels):
+                    selected = [rows for rows in visible_groups if category(rows[-1]["asset"]) == panel]
+                    duplicates = Counter(rows[-1]["tag"] for rows in selected)
+                    for rows in sorted(selected, key=lambda rows: rows[-1]["tag"]):
+                        tag = rows[-1]["tag"]
+                        label = tag if duplicates[tag] == 1 else f"{tag} / asset {rows[-1]['asset_id']}"
+                        xs = [parse_time(row["observed_at"]) for row in rows]
+                        ys = [int(row["total"]) for row in rows]
+                        ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.6,
+                                color=colors[tag], label=label)
+                    ax.set_title(panel, loc="left", fontweight="bold")
+                    ax.set_ylabel("Cumulative downloads")
+                    ax.set_xlabel("Observation time (UTC)")
+                    ax.set_ylim(bottom=0)
+                    ax.grid(axis="y", alpha=0.6)
+                    ax.spines[["top", "right"]].set_visible(False)
+                    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+                    locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
+                    ax.xaxis.set_major_locator(locator)
+                    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator, tz=timezone.utc))
+                    if earliest is not None:
+                        if mode == "total":
+                            padding = max((latest - earliest) / 30, timedelta(hours=1))
+                            ax.set_xlim(earliest - padding, latest + padding)
+                        else:
+                            ax.set_xlim(recent_start, recent_end)
+                    else:
+                        ax.set_xticks([])
+                        ax.xaxis.set_major_formatter(NullFormatter())
+                    if selected:
+                        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
+                    else:
+                        ax.text(0.5, 0.5, "No matching observations in this window",
+                                transform=ax.transAxes, ha="center", va="center")
+                updated = latest.strftime("%Y-%m-%d %H:%M UTC") if latest else "No observations yet"
+                fig.text(0.01, 0.012, f"Last observation: {updated}", fontsize=9, color=theme["muted"])
+                fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+                destination = directory / f"downloads-{mode}-{theme_name}.svg"
+                content = io.StringIO()
+                fig.savefig(content, format="svg", metadata={"Date": None}, facecolor=theme["background"])
+                temporary = destination.with_suffix(".svg.tmp")
+                temporary.write_text(content.getvalue(), encoding="utf-8")
+                temporary.replace(destination)
+                plt.close(fig)
 
 
 def main():
@@ -225,12 +243,17 @@ def main():
     args = parser.parse_args()
     path = ROOT / "data/downloads.csv"
     history = read_history(path)
+    metadata_path = ROOT / "data/releases.json"
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
     if not args.render_only:
-        history += collect(args.repository, history)
-    render(history, ROOT / "stats")
+        history += collect(args.repository, history, metadata)
+    render(history, ROOT / "stats", metadata)
     if not args.render_only:
         save_history(path, history)
-    print(f"Rendered two charts from {len(history)} recorded asset observations")
+        temporary = metadata_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.replace(metadata_path)
+    print(f"Rendered two charts in light and dark themes from {len(history)} recorded asset observations")
 
 
 if __name__ == "__main__":

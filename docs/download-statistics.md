@@ -9,14 +9,25 @@ archives are not uploaded release assets and are not included.
 ## Output
 
 - `data/downloads.csv`: append-only observation history (stored by atomic rewrite).
-- `stats/downloads-total.svg`: cumulative counters across the full recorded history.
-- `stats/downloads-30days.svg`: the same cumulative counters for the latest 30 UTC calendar dates.
+- `data/releases.json`: publication dates used to select the newest three ROM releases.
+- `stats/downloads-30days-light.svg` and `stats/downloads-30days-dark.svg`: cumulative counters for the newest three ROM releases over the latest 30 UTC dates.
+- `stats/downloads-total-light.svg` and `stats/downloads-total-dark.svg`: cumulative counters for all releases across the full recorded history.
 
-The README embeds both SVG files. No Pages site or external chart service is
+The README shows the 30-day chart first, then the full-history chart. Each
+has light and dark variants selected by GitHub's active theme using
+`#gh-light-mode-only` and `#gh-dark-mode-only`. If GitHub follows the system
+theme, chart selection follows it too. No Pages site or external chart service is
 required. Each chart has separate panels for `lineage-*.zip` OTA files and
 `LOS*.zip` installation bundles. Other filenames appear in a third panel if
 present. `boot.img` and `recovery.img` are recorded in the CSV but excluded
-from both charts. The recent chart includes observations in its date window.
+from both charts. The recent chart includes observations in its date window
+for only the three newest ROM release tags, ranked by GitHub publication
+date, including prereleases. The same three tags are used across both panels.
+The full chart and CSV retain every release. An ordinary collection run
+refreshes publication dates; chart-only regeneration uses the saved dates.
+Tags with known publication dates take priority. If fewer than three have
+known dates, first-observation dates are used to fill the remaining places,
+with the tag name breaking ties.
 
 ## Operation
 
@@ -25,7 +36,9 @@ The workflow must be committed to `main`. Run it initially from
 The first successful run creates the CSV and both cumulative chart files.
 Subsequent runs update them in one commit to `main`. The workflow never
 edits the README itself. When upgrading from the version with a rate chart,
-the workflow removes the tracked `stats/downloads-rate.svg` automatically.
+the workflow removes the tracked old chart images automatically. The job
+uses `actions/setup-python@v6` (Node.js 24) and pins Ubuntu 24.04 rather than
+using the moving `ubuntu-latest` label.
 
 The automatic `GITHUB_TOKEN` needs `contents: write`, declared in the YAML.
 No personal access token is needed. If pushing fails, inspect the workflow
