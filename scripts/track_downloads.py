@@ -6,12 +6,14 @@ The CSV schema is compatible with the original CSV-only workflow.
 """
 
 import argparse
+import colorsys
 import csv
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import matplotlib
@@ -28,6 +30,42 @@ FIELDS = [
     "previous_observed_at", "new_downloads",
 ]
 EXCLUDED_CHART_ASSETS = {"boot.img", "recovery.img"}
+RELEASE_PALETTE = [
+    "#2f81f7", "#d97706", "#2da44e", "#a371f7", "#e5534b", "#1b9e9e",
+    "#c964a6", "#9a8b16", "#848d97", "#7957d5", "#b76b35", "#4899ab",
+]
+
+
+def version_sort_key(tag):
+    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                 for part in re.split(r"(\d+)", tag) if part)
+
+
+def release_colors(tags, release_metadata):
+    # Retain assignments even when a release leaves the recent chart or a
+    # newly published tag sorts before an existing tag.
+    used = {entry["color"].lower() for entry in release_metadata.values()
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", entry.get("color", ""))}
+    colors = {}
+    candidate_index = 0
+    for tag in sorted(tags, key=version_sort_key):
+        entry = release_metadata.setdefault(tag, {})
+        color = entry.get("color", "")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            while True:
+                if candidate_index < len(RELEASE_PALETTE):
+                    color = RELEASE_PALETTE[candidate_index]
+                else:
+                    hue = ((candidate_index - len(RELEASE_PALETTE)) * 0.61803398875) % 1
+                    rgb = colorsys.hls_to_rgb(hue, 0.5, 0.65)
+                    color = "#" + "".join(f"{round(channel * 255):02x}" for channel in rgb)
+                candidate_index += 1
+                if color.lower() not in used:
+                    break
+            entry["color"] = color
+        colors[tag] = color.lower()
+        used.add(color.lower())
+    return colors
 
 
 def parse_time(value):
@@ -66,10 +104,10 @@ def collect(repository, history, release_metadata=None):
     for release in get_all(repository, "releases"):
         if not release["draft"]:
             if release_metadata is not None:
-                release_metadata[release["tag_name"]] = {
+                release_metadata.setdefault(release["tag_name"], {}).update({
                     "published_at": release["published_at"],
                     "id": release["id"],
-                }
+                })
             for asset in get_all(repository, f"releases/{release['id']}/assets"):
                 assets.append((release["tag_name"], asset))
     if not assets:
@@ -142,8 +180,10 @@ def render(history, directory, release_metadata=None):
     if any(category(rows[-1]["asset"]) == "Other attachments" for rows in groups.values()):
         panels.append("Other attachments")
 
-    tags = sorted({row["tag"] for row in history})
-    recent_tags = select_recent_tags(history, release_metadata or {})
+    tags = sorted({row["tag"] for row in history}, key=version_sort_key)
+    metadata = release_metadata if release_metadata is not None else {}
+    colors = release_colors(tags, metadata)
+    recent_tags = select_recent_tags(history, metadata)
     latest = max((parse_time(row["observed_at"]) for row in history), default=None)
     earliest = min((parse_time(row["observed_at"]) for row in history), default=None)
     recent_start = recent_end = None
@@ -155,9 +195,9 @@ def render(history, directory, release_metadata=None):
 
     themes = {
         "light": {"background": "#ffffff", "text": "#1f2328", "grid": "#d0d7de",
-                  "muted": "#59636e", "palette": ["#0969da", "#bc4c00", "#1a7f37", "#8250df", "#cf222e", "#0550ae", "#953800", "#0a3069", "#6639ba", "#116329"]},
+                  "muted": "#59636e"},
         "dark": {"background": "#0d1117", "text": "#e6edf3", "grid": "#30363d",
-                 "muted": "#9198a1", "palette": ["#58a6ff", "#ffa657", "#7ee787", "#d2a8ff", "#ff7b72", "#79c0ff", "#ffc680", "#a5d6ff", "#e2c5ff", "#aff5b4"]},
+                 "muted": "#9198a1"},
     }
     for mode in ("30days", "total"):
         visible_groups = []
@@ -184,8 +224,6 @@ def render(history, directory, release_metadata=None):
                 "ytick.color": theme["text"], "grid.color": theme["grid"],
             }
             with plt.rc_context(settings):
-                colors = {tag: theme["palette"][i % len(theme["palette"])]
-                          for i, tag in enumerate(tags)}
                 fig, axes = plt.subplots(len(shown_panels), 1, figsize=(12, 4.5 * len(shown_panels)))
                 title = ("Cumulative ROM downloads — full history" if mode == "total"
                          else "Cumulative ROM downloads — latest 30 days / newest 3 releases")
@@ -193,7 +231,9 @@ def render(history, directory, release_metadata=None):
                 for ax, panel in zip(axes, shown_panels):
                     selected = [rows for rows in visible_groups if category(rows[-1]["asset"]) == panel]
                     duplicates = Counter(rows[-1]["tag"] for rows in selected)
-                    for rows in sorted(selected, key=lambda rows: rows[-1]["tag"]):
+                    for rows in sorted(selected, key=lambda rows: (
+                            version_sort_key(rows[-1]["tag"]), rows[-1]["asset"].casefold(),
+                            int(rows[-1]["asset_id"]))):
                         tag = rows[-1]["tag"]
                         label = tag if duplicates[tag] == 1 else f"{tag} / asset {rows[-1]['asset_id']}"
                         xs = [parse_time(row["observed_at"]) for row in rows]

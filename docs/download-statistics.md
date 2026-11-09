@@ -9,7 +9,7 @@ archives are not uploaded release assets and are not included.
 ## Output
 
 - `data/downloads.csv`: append-only observation history (stored by atomic rewrite).
-- `data/releases.json`: publication dates used to select the newest three ROM releases.
+- `data/releases.json`: publication dates for recent-release selection and persistent per-release colours.
 - `stats/downloads-30days-light.svg` and `stats/downloads-30days-dark.svg`: cumulative counters for the newest three ROM releases over the latest 30 UTC dates.
 - `stats/downloads-total-light.svg` and `stats/downloads-total-dark.svg`: cumulative counters for all releases across the full recorded history.
 
@@ -22,7 +22,10 @@ required. Each chart has separate panels for `lineage-*.zip` OTA files and
 present. `boot.img` and `recovery.img` are recorded in the CSV but excluded
 from both charts. The recent chart includes observations in its date window
 for only the three newest ROM release tags, ranked by GitHub publication
-date, including prereleases. The same three tags are used across both panels.
+date, including prereleases. The same three tags are used across both panels. Lines and legends use
+ascending numeric version order, independent of publication date. Each
+release has one colour shared by both views and both themes, saved in
+`data/releases.json` so future releases do not shift existing colours.
 The full chart and CSV retain every release. An ordinary collection run
 refreshes publication dates; chart-only regeneration uses the saved dates.
 Tags with known publication dates take priority. If fewer than three have
