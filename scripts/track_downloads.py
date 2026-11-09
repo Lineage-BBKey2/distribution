@@ -22,6 +22,8 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, NullFormatter
+from matplotlib.legend import Legend
+from matplotlib.lines import Line2D
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +167,45 @@ def select_recent_tags(history, release_metadata):
     return set(sorted(first_seen, key=rank, reverse=True)[:3])
 
 
+def shared_history_legend(fig, handles_by_tag):
+    """Fit one row-major, wrapping legend below the full-history panels."""
+    if not handles_by_tag:
+        fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+        return
+
+    tags = sorted(handles_by_tag, key=version_sort_key)
+    entries = [(handles_by_tag[tag], tag) for tag in tags]
+    options = dict(frameon=False, fontsize=10, handlelength=2,
+                   columnspacing=1.4, labelspacing=0.6,
+                   borderpad=0, borderaxespad=0)
+    renderer = fig.canvas.get_renderer()
+    available_width = (fig.get_figwidth() - 0.8) * fig.dpi
+    for columns in range(min(len(entries), 12), 0, -1):
+        rows = (len(entries) + columns - 1) // columns
+        padding = (Line2D([], [], linestyle="none", marker="", alpha=0), "")
+        padded = entries + [padding] * (rows * columns - len(entries))
+        # Matplotlib fills columns first. Transpose a padded row-major grid
+        # so versions actually read left-to-right before starting a new row.
+        ordered = [padded[row * columns + column]
+                   for column in range(columns) for row in range(rows)]
+        handles, labels = zip(*ordered)
+        probe = Legend(fig, handles, labels, loc="lower center",
+                       ncols=columns, **options)
+        extent = probe.get_window_extent(renderer)
+        if extent.width <= available_width:
+            break
+
+    legend_height = extent.height / fig.dpi
+    fig.set_size_inches(fig.get_figwidth(), fig.get_figheight() + legend_height + 0.45)
+    height = fig.get_figheight()
+    fig.legend(handles, labels, loc="lower center", ncols=columns,
+               bbox_to_anchor=(0.5, 0.45 / height),
+               bbox_transform=fig.transFigure, **options)
+    # Reserve physical space for the legend, a gap, and the observation
+    # timestamp. Added rows increase image height instead of overlapping.
+    fig.tight_layout(rect=(0, (0.45 + legend_height + 0.25) / height, 1, 0.965))
+
+
 def render(history, directory, release_metadata=None):
     directory.mkdir(parents=True, exist_ok=True)
     # Keep these assets in the CSV, but omit them from both charts.
@@ -228,6 +269,7 @@ def render(history, directory, release_metadata=None):
                 title = ("Cumulative ROM downloads — full history" if mode == "total"
                          else "Cumulative ROM downloads — latest 30 days / newest 3 releases")
                 fig.suptitle(title, fontsize=16, fontweight="bold", y=0.99)
+                shared_handles = {}
                 for ax, panel in zip(axes, shown_panels):
                     selected = [rows for rows in visible_groups if category(rows[-1]["asset"]) == panel]
                     duplicates = Counter(rows[-1]["tag"] for rows in selected)
@@ -238,8 +280,9 @@ def render(history, directory, release_metadata=None):
                         label = tag if duplicates[tag] == 1 else f"{tag} / asset {rows[-1]['asset_id']}"
                         xs = [parse_time(row["observed_at"]) for row in rows]
                         ys = [int(row["total"]) for row in rows]
-                        ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.6,
-                                color=colors[tag], label=label)
+                        line, = ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.6,
+                                        color=colors[tag], label=label)
+                        shared_handles.setdefault(tag, line)
                     ax.set_title(panel, loc="left", fontweight="bold")
                     ax.set_ylabel("Cumulative downloads")
                     ax.set_xlabel("Observation time (UTC)")
@@ -259,14 +302,19 @@ def render(history, directory, release_metadata=None):
                     else:
                         ax.set_xticks([])
                         ax.xaxis.set_major_formatter(NullFormatter())
-                    if selected:
+                    if selected and mode != "total":
                         ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
-                    else:
+                    elif not selected:
                         ax.text(0.5, 0.5, "No matching observations in this window",
                                 transform=ax.transAxes, ha="center", va="center")
                 updated = latest.strftime("%Y-%m-%d %H:%M UTC") if latest else "No observations yet"
-                fig.text(0.01, 0.012, f"Last observation: {updated}", fontsize=9, color=theme["muted"])
-                fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+                if mode == "total":
+                    shared_history_legend(fig, shared_handles)
+                    footer_y = 0.12 / fig.get_figheight()
+                else:
+                    fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+                    footer_y = 0.012
+                fig.text(0.01, footer_y, f"Last observation: {updated}", fontsize=9, color=theme["muted"])
                 destination = directory / f"downloads-{mode}-{theme_name}.svg"
                 content = io.StringIO()
                 fig.savefig(content, format="svg", metadata={"Date": None}, facecolor=theme["background"])
