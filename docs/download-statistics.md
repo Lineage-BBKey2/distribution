@@ -10,7 +10,7 @@ archives are not uploaded release assets and are not included.
 
 - `data/downloads.csv`: append-only observation history (stored by atomic rewrite).
 - `data/releases.json`: publication dates for recent-release selection and persistent per-release colours.
-- `stats/downloads-30days-light.svg` and `stats/downloads-30days-dark.svg`: cumulative counters for the newest three ROM releases over the latest 30 UTC dates.
+- `stats/downloads-30days-light.svg` and `stats/downloads-30days-dark.svg`: cumulative counters for the newest three ROM releases over the last 30 UTC dates.
 - `stats/downloads-total-light.svg` and `stats/downloads-total-dark.svg`: cumulative counters for all releases across the full recorded history.
 
 The README shows the 30-day chart first, then the full-history chart. Each
@@ -65,3 +65,27 @@ This does not query GitHub or append an observation. Collection additionally
 requires the GitHub CLI (`gh`), authenticated using `gh auth login` locally
 or the workflow's `GH_TOKEN`. The scheduled job uses GitHub-hosted Ubuntu,
 which supplies `gh`.
+
+## Daily download chart
+
+`stats/downloads-daily-light.svg` and `stats/downloads-daily-dark.svg` show
+one combined line across the entire recorded history. Every release and
+uploaded asset is included except filenames `boot.img` and `recovery.img`
+(case-insensitive). The last-30-days and three-release limits do not apply.
+
+Each point sums asset-counter increases between consecutive observations
+and divides by the elapsed time in days. A missed run therefore gives an
+average over the longer interval; manual runs use their actual interval.
+These are download rates, not exact midnight-to-midnight calendar totals.
+The initial observation is a baseline, not a daily download count.
+
+Asset creation timestamps are saved in `data/releases.json`. If an asset
+was created after the preceding observation, its initial downloads can be
+included from a known zero baseline. An interval with an unexplained new
+asset, a removed asset, or a decreased counter is left as a gap because its
+complete combined increase is unknown. A stable subsequent pair resumes
+the line. Missing data is never converted to zero or spread across days.
+
+Legend tags beginning with `2026` appear before version-number tags. Each
+group retains natural numeric order. Publication-date selection and stored
+release colours remain independent of this display order.

@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 import io
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -39,8 +40,9 @@ RELEASE_PALETTE = [
 
 
 def version_sort_key(tag):
-    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
-                 for part in re.split(r"(\d+)", tag) if part)
+    natural = tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                    for part in re.split(r"(\d+)", tag) if part)
+    return (0 if tag.startswith("2026") else 1, natural)
 
 
 def release_colors(tags, release_metadata):
@@ -111,6 +113,9 @@ def collect(repository, history, release_metadata=None):
                     "id": release["id"],
                 })
             for asset in get_all(repository, f"releases/{release['id']}/assets"):
+                if release_metadata is not None and asset.get("created_at"):
+                    release_metadata[release["tag_name"]].setdefault(
+                        "asset_created_at", {})[str(asset["id"])] = asset["created_at"]
                 assets.append((release["tag_name"], asset))
     if not assets:
         raise RuntimeError("No published release assets found; existing history was not changed")
@@ -206,6 +211,91 @@ def shared_history_legend(fig, handles_by_tag):
     fig.tight_layout(rect=(0, (0.45 + legend_height + 0.25) / height, 1, 0.965))
 
 
+def combined_daily_series(history, release_metadata):
+    """Combine counter increases over matching snapshot intervals."""
+    snapshots = defaultdict(dict)
+    for row in history:
+        if row["asset"].casefold() not in EXCLUDED_CHART_ASSETS:
+            snapshots[parse_time(row["observed_at"])][row["asset_id"]] = row
+    births = {}
+    for entry in release_metadata.values():
+        births.update(entry.get("asset_created_at", {}))
+
+    observed = sorted(snapshots)
+    xs, rates = [], []
+    for start, end in zip(observed, observed[1:]):
+        previous, current = snapshots[start], snapshots[end]
+        # A removed asset's final increase is unknown. Leave that interval
+        # blank rather than silently understating the combined download rate.
+        complete = not (previous.keys() - current.keys())
+        increase = 0
+        for asset_id, row in current.items():
+            if asset_id in previous:
+                delta = int(row["total"]) - int(previous[asset_id]["total"])
+                if delta < 0:
+                    complete = False
+                else:
+                    increase += delta
+            else:
+                created = births.get(asset_id)
+                if created and start < parse_time(created) <= end:
+                    # This asset did not exist at the previous observation:
+                    # its zero baseline is known, so count initial downloads.
+                    increase += int(row["total"])
+                else:
+                    complete = False
+        xs.append(end)
+        rates.append(increase * 86400 / (end - start).total_seconds()
+                     if complete else math.nan)
+    return xs, rates
+
+
+def render_daily(history, directory, metadata, themes, earliest, latest):
+    xs, rates = combined_daily_series(history, metadata)
+    for theme_name, theme in themes.items():
+        settings = {
+            "font.family": "DejaVu Sans", "font.size": 10,
+            "svg.hashsalt": "rom-download-statistics",
+            "figure.facecolor": theme["background"], "axes.facecolor": theme["background"],
+            "text.color": theme["text"], "axes.labelcolor": theme["text"],
+            "axes.edgecolor": theme["muted"], "xtick.color": theme["text"],
+            "ytick.color": theme["text"], "grid.color": theme["grid"],
+        }
+        with plt.rc_context(settings):
+            fig, ax = plt.subplots(figsize=(12, 4.5))
+            fig.suptitle("Combined downloads per day — full history",
+                         fontsize=16, fontweight="bold", y=0.99)
+            if xs:
+                ax.plot(xs, rates, color="#2f81f7", marker="o", markersize=3, linewidth=1.6)
+            if not any(math.isfinite(value) for value in rates):
+                ax.text(0.5, 0.5, "No complete download intervals recorded yet",
+                        transform=ax.transAxes, ha="center", va="center")
+            ax.set_ylabel("Downloads/day (interval average)")
+            ax.set_xlabel("Observation time (UTC)")
+            ax.set_ylim(bottom=0)
+            ax.grid(axis="y", alpha=0.6)
+            ax.spines[["top", "right"]].set_visible(False)
+            locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator, tz=timezone.utc))
+            if earliest is not None:
+                padding = max((latest - earliest) / 30, timedelta(hours=1))
+                ax.set_xlim(earliest - padding, latest + padding)
+            else:
+                ax.set_xticks([])
+                ax.xaxis.set_major_formatter(NullFormatter())
+            updated = latest.strftime("%Y-%m-%d %H:%M UTC") if latest else "No observations yet"
+            fig.text(0.01, 0.012, f"Last observation: {updated}", fontsize=9, color=theme["muted"])
+            fig.tight_layout(rect=(0, 0.06, 1, 0.95))
+            destination = directory / f"downloads-daily-{theme_name}.svg"
+            content = io.StringIO()
+            fig.savefig(content, format="svg", metadata={"Date": None}, facecolor=theme["background"])
+            temporary = destination.with_suffix(".svg.tmp")
+            temporary.write_text(content.getvalue(), encoding="utf-8")
+            temporary.replace(destination)
+            plt.close(fig)
+
+
 def render(history, directory, release_metadata=None):
     directory.mkdir(parents=True, exist_ok=True)
     # Keep these assets in the CSV, but omit them from both charts.
@@ -267,7 +357,7 @@ def render(history, directory, release_metadata=None):
             with plt.rc_context(settings):
                 fig, axes = plt.subplots(len(shown_panels), 1, figsize=(12, 4.5 * len(shown_panels)))
                 title = ("Cumulative ROM downloads — full history" if mode == "total"
-                         else "Cumulative ROM downloads — latest 30 days / newest 3 releases")
+                         else "Cumulative ROM downloads — last 30 days / newest 3 releases")
                 fig.suptitle(title, fontsize=16, fontweight="bold", y=0.99)
                 shared_handles = {}
                 for ax, panel in zip(axes, shown_panels):
@@ -323,6 +413,8 @@ def render(history, directory, release_metadata=None):
                 temporary.replace(destination)
                 plt.close(fig)
 
+    render_daily(history, directory, metadata, themes, earliest, latest)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -341,7 +433,7 @@ def main():
         temporary = metadata_path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(metadata_path)
-    print(f"Rendered two charts in light and dark themes from {len(history)} recorded asset observations")
+    print(f"Rendered three charts in light and dark themes from {len(history)} recorded asset observations")
 
 
 if __name__ == "__main__":
