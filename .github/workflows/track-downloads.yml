@@ -2,7 +2,7 @@ name: Track ROM downloads
 
 on:
   schedule:
-    - cron: "17 2 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -22,19 +22,55 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Check whether today's observation is due
+        id: due
+        env:
+          WORKFLOW_EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import csv
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          now = datetime.now(timezone.utc)
+          scheduled = os.environ["WORKFLOW_EVENT"] == "schedule"
+          last = None
+          history = Path("data/downloads.csv")
+          if history.exists():
+              with history.open(newline="", encoding="utf-8") as stream:
+                  for row in csv.DictReader(stream):
+                      stamp = datetime.fromisoformat(row["observed_at"].replace("Z", "+00:00"))
+                      if stamp.tzinfo is None:
+                          raise ValueError("Observation timestamp must include a timezone")
+                      stamp = stamp.astimezone(timezone.utc)
+                      last = stamp if last is None else max(last, stamp)
+          due = not scheduled or (
+              (now.hour, now.minute) >= (2, 17)
+              and (last is None or last.date() < now.date())
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write(f"collect={str(due).lower()}\n")
+          print(f"event={os.environ['WORKFLOW_EVENT']}; last={last}; collect={due}")
+          PYTHON
+
       - uses: actions/setup-python@v6
+        if: steps.due.outputs.collect == 'true'
         with:
           python-version: "3.12"
 
       - name: Install chart dependency
+        if: steps.due.outputs.collect == 'true'
         run: python -m pip install matplotlib
 
       - name: Collect counters and regenerate charts
+        if: steps.due.outputs.collect == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/track_downloads.py --repository Lineage-BBKey2/distribution
 
       - name: Commit statistics to main
+        if: steps.due.outputs.collect == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
