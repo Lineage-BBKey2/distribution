@@ -16,7 +16,7 @@
 
 ### Enable/disable MGLRU:
 - MGLRU (Multi-Generational Least Recently Used) is a newer memory management algorithm (backported to kernel 4.19) intended to improve memory reclaiming decisions when available memory is low. 
-- MGLRU is off by default on this ROM because its overall benefit and impact on performance and battery life has not been adequately assessed. It has also not been shown to break anything, so users who wish to experiment with it can enable or re-disable it as shown below.
+- MGLRU is off by default on this ROM because its overall benefit and impact on performance and battery life have not been adequately assessed. It has also not been shown to break anything, so users who wish to experiment with it can enable or re-disable it as shown below.
 - Enable MGLRU:
   ```
   adb root
@@ -47,7 +47,7 @@
   adb shell getprop persist.vendor.key2.mglru.enabled
   adb shell cat /sys/kernel/mm/lru_gen/enabled
   ```
-    - The last two lines should produce `0` and `0x0000`
+    - The last two lines should produce `0` and `0x0000`.
 
 ### Check/Switch ZRAM Compression Algorithm:
 - LZ4 is the recommended compression algorithm. ZSTD gives higher compression ratios, but at the cost of higher CPU usage which the KEY2's SDM660 processor may not handle well.
@@ -67,6 +67,7 @@
   (after reboot confirm change with:)
   ```
   adb root
+  adb wait-for-device
   adb shell cat /sys/block/zram0/comp_algorithm
   ```
 
