@@ -55,7 +55,7 @@
   ```
   adb root
   adb wait-for-device
-  adb shell cat /sys/block/zram0/comp_algorithm`
+  adb shell cat /sys/block/zram0/comp_algorithm
   ```
 - Switch to LZ4 compression (substitute `zstd` or `lzo` if those are desired):
   ```
